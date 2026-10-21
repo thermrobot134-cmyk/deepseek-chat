@@ -10,12 +10,30 @@
   #settings { background: #1a1a1c; padding: 10px; display: flex; gap: 8px; flex-wrap: wrap; border-bottom: 1px solid #2a2a2d; font-size: 12px; }
   #settings input { flex: 1; min-width: 140px; background: #0f0f10; color: #e6e6e6; border: 1px solid #2a2a2d; padding: 8px; border-radius: 6px; }
   #chat { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 12px; }
-  .msg { max-width: 88%; padding: 12px 14px; border-radius: 16px; line-height: 1.5; font-size: 14px; white-space: pre-wrap; word-wrap: break-word; }
-  .user { align-self: flex-end; background: #2d5bd1; color: #fff; border-bottom-right-radius: 4px; }
-  .ai { align-self: flex-start; background: #1e1e21; border-bottom-left-radius: 4px; }
-  details { margin: 8px 0 10px; background: #141416; border: 1px solid #2a2a2d; border-radius: 8px; padding: 8px 12px; font-size: 13px; color: #9aa; }
-  details summary { cursor: pointer; color: #7fa8ff; font-weight: 600; }
-  details pre { white-space: pre-wrap; font-family: inherit; color: #b5b5b5; margin-top: 6px; }
+  .msg { max-width: 92%; padding: 12px 14px; border-radius: 16px; line-height: 1.5; font-size: 14px; word-wrap: break-word; }
+  .user { align-self: flex-end; background: #2d5bd1; color: #fff; border-bottom-right-radius: 4px; white-space: pre-wrap; }
+  .ai { align-self: flex-start; background: #1e1e21; border-bottom-left-radius: 4px; width: 92%; }
+  .answer { white-space: pre-wrap; margin-top: 8px; }
+
+  .think-root { margin: 0 0 10px; }
+  .think-root > details { background: #141416; border: 1px solid #2a2a2d; border-radius: 10px; padding: 8px 12px; font-size: 13px; color: #b5b5b5; }
+  .think-root > details > summary { cursor: pointer; color: #7fa8ff; font-weight: 600; list-style: none; }
+  .think-root > details > summary::-webkit-details-marker { display: none; }
+  .think-root > details > summary::before { content: '▸ '; display: inline-block; transition: transform 0.15s; }
+  .think-root > details[open] > summary::before { transform: rotate(90deg); }
+
+  .phase { background: #101012; border: 1px solid #242428; border-radius: 8px; padding: 6px 10px; margin: 6px 0; }
+  .phase > summary { cursor: pointer; color: #9ec5ff; font-weight: 500; font-size: 12.5px; list-style: none; }
+  .phase > summary::-webkit-details-marker { display: none; }
+  .phase > summary::before { content: '› '; color: #6a6a70; }
+  .phase[open] > summary::before { content: '⌄ '; }
+
+  .step { background: #0d0d0f; border: 1px dashed #2a2a2d; border-radius: 6px; padding: 4px 8px; margin: 4px 0 4px 8px; }
+  .step > summary { cursor: pointer; color: #a0a0a8; font-size: 12px; list-style: none; }
+  .step > summary::-webkit-details-marker { display: none; }
+  .step > summary::before { content: '· '; }
+  .phase-body, .step-body { white-space: pre-wrap; font-family: inherit; font-size: 12px; line-height: 1.5; color: #8a8a92; padding: 4px 0; }
+
   #inputbar { display: flex; padding: 10px; gap: 8px; background: #1a1a1c; border-top: 1px solid #2a2a2d; }
   #input { flex: 1; background: #0f0f10; color: #e6e6e6; border: 1px solid #2a2a2d; border-radius: 12px; padding: 12px; font-size: 14px; resize: none; }
   #send { background: #2d5bd1; color: #fff; border: none; border-radius: 12px; padding: 0 20px; font-weight: 600; font-size: 14px; }
@@ -37,19 +55,37 @@
 </div>
 
 <script>
-const chatEl = document.getElementById('chat');
+const chatEl  = document.getElementById('chat');
 const inputEl = document.getElementById('input');
-const sendEl = document.getElementById('send');
+const sendEl  = document.getElementById('send');
 const proxyEl = document.getElementById('proxy');
-const keyEl = document.getElementById('key');
+const keyEl   = document.getElementById('key');
 
-// Remember settings on this device
 proxyEl.value = localStorage.getItem('proxy') || '';
-keyEl.value = localStorage.getItem('key') || '';
+keyEl.value   = localStorage.getItem('key')   || '';
 proxyEl.oninput = () => localStorage.setItem('proxy', proxyEl.value);
-keyEl.oninput = () => localStorage.setItem('key', keyEl.value);
+keyEl.oninput   = () => localStorage.setItem('key',   keyEl.value);
 
-const history = []; // keeps conversation context
+const history = [];
+
+const SYSTEM_PROMPT = `You are DeepSeek, a helpful AI assistant made by DeepSeek. Never claim to be ChatGPT or made by OpenAI.
+
+REASONING FORMAT (very important):
+Structure your internal reasoning using these exact markers, each on its own line:
+
+[PHASE: <short title>]
+[STEP: <short title>]
+
+Use [PHASE: ...] for high-level stages, for example:
+- Discussing user conversation
+- Figuring out how to build it
+- Searching for information
+- Preparing
+- Verifying
+
+Use [STEP: ...] for smaller sub-steps inside a phase.
+
+Put the actual thinking text under each marker. Keep marker titles to 2–5 words. Do NOT use these markers in your final answer — they belong only in the reasoning stream.`;
 
 function addMsg(role, text = '') {
   const div = document.createElement('div');
@@ -60,27 +96,99 @@ function addMsg(role, text = '') {
   return div;
 }
 
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
 async function send() {
   const text = inputEl.value.trim();
   if (!text) return;
   inputEl.value = '';
   addMsg('user', text);
+
+  if (history.length === 0) {
+    history.push({ role: 'system', content: SYSTEM_PROMPT });
+  }
   history.push({ role: 'user', content: text });
 
   sendEl.disabled = true;
   const aiEl = addMsg('assistant', '');
 
-  // Create the collapsible "Thinking" tab
-  const thinkBox = document.createElement('details');
-  thinkBox.innerHTML = '<summary>Thinking...</summary><pre></pre>';
-  const thinkPre = thinkBox.querySelector('pre');
-  aiEl.appendChild(thinkBox);
+  const thinkRoot = document.createElement('div');
+  thinkRoot.className = 'think-root';
+  const rootDetails = document.createElement('details');
+  rootDetails.open = true;
+  rootDetails.innerHTML = '<summary>Thinking…</summary>';
+  thinkRoot.appendChild(rootDetails);
+  aiEl.appendChild(thinkRoot);
 
   const answerEl = document.createElement('div');
+  answerEl.className = 'answer';
   aiEl.appendChild(answerEl);
 
+  let pending = '';
+  let currentPhase = null;
+  let currentTextEl = null;
+  let answerStarted = false;
   let answerText = '';
-  let thinkText = '';
+
+  function ensurePhase() {
+    if (!currentPhase) {
+      currentPhase = document.createElement('details');
+      currentPhase.className = 'phase';
+      currentPhase.open = true;
+      currentPhase.innerHTML = '<summary>Thinking</summary><div class="phase-body"></div>';
+      rootDetails.appendChild(currentPhase);
+      currentTextEl = currentPhase.querySelector('.phase-body');
+    }
+  }
+
+  function newPhase(title) {
+    if (currentPhase) currentPhase.open = false;
+    currentPhase = document.createElement('details');
+    currentPhase.className = 'phase';
+    currentPhase.open = true;
+    currentPhase.innerHTML = '<summary>' + escapeHtml(title) + '</summary><div class="phase-body"></div>';
+    rootDetails.appendChild(currentPhase);
+    currentTextEl = currentPhase.querySelector('.phase-body');
+  }
+
+  function newStep(title) {
+    ensurePhase();
+    const step = document.createElement('details');
+    step.className = 'step';
+    step.open = true;
+    step.innerHTML = '<summary>' + escapeHtml(title) + '</summary><div class="step-body"></div>';
+    currentPhase.querySelector('.phase-body').appendChild(step);
+    currentTextEl = step.querySelector('.step-body');
+  }
+
+  function appendText(t) {
+    if (!t) return;
+    ensurePhase();
+    currentTextEl.appendChild(document.createTextNode(t));
+  }
+
+  function parseReasoning(chunk) {
+    pending += chunk;
+    const tailMatch = pending.match(/\[[^\]]*$/);
+    let holdBack = '';
+    if (tailMatch) {
+      holdBack = tailMatch[0];
+      pending = pending.slice(0, pending.length - holdBack.length);
+    }
+    const re = /\[(PHASE|STEP):\s*([^\]]+)\]/g;
+    let lastIndex = 0;
+    let m;
+    while ((m = re.exec(pending)) !== null) {
+      appendText(pending.slice(lastIndex, m.index));
+      if (m[1] === 'PHASE') newPhase(m[2].trim());
+      else newStep(m[2].trim());
+      lastIndex = re.lastIndex;
+    }
+    appendText(pending.slice(lastIndex));
+    pending = holdBack;
+  }
 
   try {
     const resp = await fetch(proxyEl.value, {
@@ -90,7 +198,7 @@ async function send() {
         'Authorization': 'Bearer ' + keyEl.value,
       },
       body: JSON.stringify({
-        model: 'deepseek-v4-flash',
+        model: 'deepseek-flash',
         messages: history,
         stream: true,
       }),
@@ -117,10 +225,15 @@ async function send() {
           const json = JSON.parse(data);
           const delta = json.choices?.[0]?.delta || {};
           if (delta.reasoning_content) {
-            thinkText += delta.reasoning_content;
-            thinkPre.textContent = thinkText;
+            parseReasoning(delta.reasoning_content);
           }
           if (delta.content) {
+            if (!answerStarted) {
+              answerStarted = true;
+              if (pending) { appendText(pending); pending = ''; }
+              rootDetails.open = false;
+              rootDetails.querySelector('summary').textContent = 'Thought for a moment';
+            }
             answerText += delta.content;
             answerEl.textContent = answerText;
           }
@@ -129,8 +242,9 @@ async function send() {
       }
     }
 
-    if (!thinkText) thinkBox.remove();
-    else thinkBox.querySelector('summary').textContent = 'Thinking';
+    if (pending) { appendText(pending); pending = ''; }
+
+    if (!answerStarted && !currentPhase) thinkRoot.remove();
 
     history.push({ role: 'assistant', content: answerText });
   } catch (err) {
